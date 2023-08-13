@@ -7,6 +7,7 @@ from PIL import Image
 
 import torch
 import clip
+import faiss
 
 
 #Path
@@ -26,7 +27,15 @@ class TextEmbedding():
         text_feature = self.model.encode_text(text_inputs)[0]
     
     return text_feature.detach().cpu().numpy()
-  
+
+  def create_faiss_index(feats_arr):
+      feats_arr = feats_arr.astype('float32')
+      index = faiss.IndexFlatIP(feats_arr.shape[1])
+      index.add(feats_arr)
+      return index
+
+
+
 
 # ==================================
 text = "A car is parked on the road"
@@ -38,16 +47,20 @@ print(text_feat_arr.shape, type(text_feat_arr))
 
 from typing import List, Tuple
 def indexing_methods() -> List[Tuple[str, int, np.ndarray],]:
-  db = []
- 
-  for feat_npy in tqdm(os.listdir(VISUAL_FEATURES_PATH)):
-    video_name = feat_npy.split('.')[0]
-    feats_arr = np.load(os.path.join(VISUAL_FEATURES_PATH, feat_npy))
-    for idx, feat in enumerate(feats_arr):
- 
-      instance = (video_name, idx, feat)
-      db.append(instance)
-  return db
+    db = []
+    indexes = []
+
+    for feat_npy in tqdm(os.listdir(VISUAL_FEATURES_PATH)):
+        video_name = feat_npy.split('.')[0]
+        feats_arr = np.load(os.path.join(VISUAL_FEATURES_PATH, feat_npy))
+        # index = create_faiss_index(feats_arr)
+        index = text_embedd.create_faiss_index(feats_arr)
+        indexes.append(index)
+
+        for idx, feat in enumerate(feats_arr):
+            instance = (video_name, idx, feat)
+            db.append(instance)
+    return db, indexes
 
 
 # ==================================
@@ -55,10 +68,15 @@ visual_features_db = indexing_methods()
 print()
 print(visual_features_db[0][:2], visual_features_db[0][-1].shape)
 
-def search_engine(query_arr: np.array, 
-                  db: list, 
-                  topk:int=10, 
-                  measure_method: str="dot_product") -> List[dict,]:
+def search_engine(query_arr: np.array, db: list, indexes: list, topk:int=10):
+  search_result = []
+  for index in indexes:
+    _, I = index.search(query_arr, topk)
+
+    for i, (instance_id, distance) in enumerate(zip(I[0], I[1])):
+      video_name, idx, _ = db[instance_id]
+      search_result.append({"video_name":video_name, "keyframe_id": idx, "score": distance})
+  return search_result
   
  
   measure = []
@@ -133,45 +151,22 @@ def user_input():
     return text
 input = user_input()
 
-topk = st.sidebar.slider('Topk', 0,50)
-measure_method = st.sidebar.select_slider('measure_method:', ['dot_product', 'l1_norm'])
+topk = st.slider('Topk', 0,50)
+measure_method = st.select_slider('measure_method:', ['dot_product', 'l1_norm'])
 
 
 text_feat_arr = text_embedd(input)
 search_result = search_engine(text_feat_arr, visual_features_db, int(topk), measure_method)
-
-
 images = read_image(search_result)
 
-# n = st.number_input("Grid width: ", 1, 5, 2)
-# groups = []
-# for i in range (0, len(images), n):
-#   groups.append(images[i:i+n])
-
-# for group in  groups:
-#   cols = st.columns(n)
-#   for i, image in enumerate(group):
-#     cols[i].image(image)
 
 
-n = st.sidebar.number_input("Grid width: ", 1, 5, 2)
 
 st.subheader('Dự đoán')
 if input == '':
     st.write('Kết quả dựa trên truy vấn:')
 else:
-    # for im in images:
-    #     st.image(im, caption="Ảnh truy vấn ", use_column_width=True)  
-
-    groups = []
-    for i in range (0, len(images), n):
-      groups.append(images[i:i+n])
-
-    for group in  groups:
-      cols = st.columns(n)
-      for i, image in enumerate(group):
-        cols[i].image(image)
-
-
+    for im in images:
+        st.image(im, caption="Ảnh truy vấn ", use_column_width=True)  
     st.write(search_result)
     
